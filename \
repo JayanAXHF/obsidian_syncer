@@ -1,0 +1,83 @@
+mod errors;
+mod logging;
+use std::sync::Arc;
+
+use itertools::Itertools;
+use tokio::sync::mpsc;
+
+use color_eyre::eyre::Ok;
+use color_eyre::eyre::Result;
+use obsidian_syncer::structs::*;
+use tracing::info;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    logging::init()?;
+    errors::init()?;
+    let (tx, mut rx) = mpsc::channel(100);
+    let rx_arc = std::sync::Arc::new(tokio::sync::Mutex::new(rx));
+    info!("Test logging");
+    let vaults = Vaults::new();
+
+    let (list_watcher_tx, list_watcher_rx) = std::sync::mpsc::channel();
+    let _thread_vault_list = std::thread::spawn(move || {
+        obsidian_syncer::watch_vault_list(list_watcher_tx).unwrap();
+    });
+    let tx_move = tx.clone();
+    let rx_move = rx_arc.clone();
+    let _thread_vault_listeners = tokio::spawn(async move {
+        println!("Starting vault listeners");
+        let rx_arc = Arc::clone(&rx_move);
+
+        obsidian_syncer::setup_vault_listeners(tx_move.clone(), rx_arc)
+            .await
+            .unwrap();
+    });
+
+    tx.send(Action::ChangeOpenVaults(vaults.get_open_vaults()))
+        .await
+        .unwrap();
+    for event in list_watcher_rx {
+        info!("Event: {:?}", event);
+        let vaults = Vaults::new();
+        let open_vaults = vaults.get_open_vaults();
+        tx.send(Action::ChangeOpenVaults(open_vaults))
+            .await
+            .unwrap();
+    }
+    let _thread_syncer = tokio::spawn(async move {
+        println!("Starting syncer");
+        loop {
+            let rx_arc = Arc::clone(&rx_arc);
+            let mut rx = rx_arc.lock().await;
+            let Some(event) = rx.recv().await else {
+                break;
+            };
+            info!("Event: {:?}", event);
+            match event {
+                Action::UpdatePlugins(vault_path) => {
+                    let vaults = Vaults::new();
+                    let vaults = vaults.get_vaults();
+                    let to_be_synced = vaults
+                        .iter()
+                        .filter(|v| v.path != vault_path)
+                        .cloned()
+                        .collect_vec();
+                    let _thread = tokio::spawn(async move {
+                        for vault in to_be_synced {
+                            sync_vault(vault.path.clone(), vault_path.clone())
+                                .await
+                                .unwrap();
+                        }
+                    });
+                }
+                _ => {
+                    // Not this one's job
+                }
+            }
+        }
+    });
+    _thread_vault_list.join().unwrap();
+    _thread_vault_listeners.await?;
+    Ok(())
+}

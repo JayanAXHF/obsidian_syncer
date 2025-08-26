@@ -67,6 +67,9 @@ impl Vaults {
             })
             .collect_vec()
     }
+    pub fn get_vaults(&self) -> Vec<Vault> {
+        self.vaults.values().cloned().collect_vec()
+    }
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
