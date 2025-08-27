@@ -5,6 +5,7 @@ use itertools::Itertools;
 use obsidian_syncer::structs::*;
 use obsidian_syncer::sync_vault;
 use tokio::sync::broadcast;
+use tracing::debug;
 use tracing::info;
 
 #[tokio::main]
@@ -28,6 +29,7 @@ async fn main() -> Result<()> {
             .await
             .unwrap();
     });
+    let tx_move = tx.clone();
     let _thread_syncer: tokio::task::JoinHandle<std::result::Result<(), color_eyre::eyre::Error>> =
         tokio::spawn(async move {
             info!("Starting syncer");
@@ -48,12 +50,17 @@ async fn main() -> Result<()> {
                             .filter(|v| v.path != vault_path)
                             .cloned()
                             .collect_vec();
+                        debug!("TEST SYNCER");
+
+                        let tx_move = tx_move.clone();
                         let _thread: tokio::task::JoinHandle<
                             std::result::Result<(), color_eyre::eyre::Error>,
                         > = tokio::spawn(async move {
                             for vault in to_be_synced {
+                                tx_move.send(Action::StartedSync).unwrap();
                                 info!("Syncing vault {}", vault.path.display());
-                                sync_vault(vault_path.clone(), vault.path.clone()).await?
+                                sync_vault(vault_path.clone(), vault.path.clone()).await?;
+                                tx_move.send(Action::FinishedSync).unwrap();
                             }
                             Ok(())
                         });
@@ -75,6 +82,15 @@ async fn main() -> Result<()> {
             info!("Action: {:?}", action);
         }
     });
+    let tx2 = tx.clone();
+    let event_watcher_thread = tokio::spawn(async move {
+        for event in list_watcher_rx {
+            info!("Event: {:?}", event);
+            let vaults = Vaults::new();
+            let open_vaults = vaults.get_open_vaults();
+            tx2.send(Action::ChangeOpenVaults(open_vaults)).unwrap();
+        }
+    });
 
     tx.send(Action::ChangeOpenVaults(vaults.get_open_vaults()))
         .unwrap();
@@ -82,12 +98,7 @@ async fn main() -> Result<()> {
     logger_thread.await?;
     _thread_syncer.await??;
     _thread_vault_listeners.await?;
+    event_watcher_thread.await?;
     _thread_vault_list.join().unwrap();
-    for event in list_watcher_rx {
-        info!("Event: {:?}", event);
-        let vaults = Vaults::new();
-        let open_vaults = vaults.get_open_vaults();
-        tx.send(Action::ChangeOpenVaults(open_vaults)).unwrap();
-    }
     Ok(())
 }

@@ -11,6 +11,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, channel};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use structs::{Action, VAULTS_FILE, Vault, Vaults};
 use tracing::{error, info};
 
@@ -64,7 +65,9 @@ pub async fn setup_vault_listeners(
     let mut watcher_global = RecommendedWatcher::new(watcher_tx, Config::default())?;
     info!("Init watcher");
     let rx2 = tx.subscribe();
+    let tx2 = tx.clone();
     let _thread_vault_listeners: tokio::task::JoinHandle<Result<()>> = tokio::spawn(async move {
+        let tx = tx2;
         info!("Init vault watchers");
 
         let vaults = Vaults::new();
@@ -80,10 +83,12 @@ pub async fn setup_vault_listeners(
                 Action::ChangeOpenVaults(open_vaults) => {
                     let mut watcher_paths = watcher_paths.lock().unwrap();
                     for path in watcher_paths.clone() {
+                        let path = path.join(".obsidian").join("plugins");
                         let _ = watcher_global.unwatch(&path);
                     }
                     watcher_paths.clear();
                     for path in open_vaults.iter().map(|v| v.path.clone()) {
+                        let path = path.join(".obsidian").join("plugins");
                         watcher_global.watch(&path, RecursiveMode::Recursive)?;
                         watcher_paths.insert(path.clone());
                         info!(vault = ?path, "Adding vault");
@@ -92,6 +97,7 @@ pub async fn setup_vault_listeners(
                 Action::TerminateVaultListeners => {
                     let mut watcher_paths = watcher_paths.lock().unwrap();
                     for path in watcher_paths.clone() {
+                        let path = path.join(".obsidian").join("plugins");
                         let _ = watcher_global.unwatch(&path);
                     }
                     watcher_paths.clear();
@@ -106,18 +112,42 @@ pub async fn setup_vault_listeners(
         Ok(())
     });
     info!("Init watcher logging");
-    let watcher_thread = tokio::spawn(async move {
-        for event in watcher_rx {
-            match event {
-                Ok(event) => {
-                    println!("Event: {:?}", event);
-                    info!("Event: {:?}", event);
+
+    let tx3 = tx.clone();
+    let mut rx3 = tx.subscribe();
+    let watcher_thread: tokio::task::JoinHandle<color_eyre::eyre::Result<()>> =
+        tokio::spawn(async move {
+            for event in watcher_rx {
+                let can_continue = rx3.recv().await? != Action::StartedSync;
+
+                if !can_continue {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    continue;
                 }
-                Err(e) => println!("Error: {:?}", e),
+
+                let vaults = Vaults::new();
+                let vaults = vaults.get_vaults();
+                match event {
+                    Ok(event) => {
+                        info!("Event: {:?}", event);
+                        match event.kind {
+                            EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_) => {
+                                for vault in vaults.iter() {
+                                    if event.paths.iter().any(|p| p.starts_with(&vault.path)) {
+                                        tx3.send(Action::UpdatePlugins(vault.path.clone()))?;
+                                        break;
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    Err(e) => println!("Error: {:?}", e),
+                }
             }
-        }
-    });
-    watcher_thread.await?;
+            Ok(())
+        });
+    watcher_thread.await??;
     _thread_vault_listeners.await??;
 
     Ok(())
@@ -146,6 +176,10 @@ pub async fn sync_vault(from: PathBuf, to: PathBuf) -> Result<()> {
         block_size: 1024,    // split into 1KB blocks
         crypto_hash_size: 8, // store 8 bytes of crypto hash
     };
+    let from_community_plugins = from.join(".obsidian").join("community-plugins.json");
+    let to_community_plugins = to.join(".obsidian").join("community-plugins.json");
+
+    sync_file(from_community_plugins, to_community_plugins)?;
 
     for entry in walk_result {
         let entry = entry?;
@@ -180,6 +214,30 @@ pub async fn sync_vault(from: PathBuf, to: PathBuf) -> Result<()> {
     Ok(())
 }
 
+pub fn sync_file(from: PathBuf, to: PathBuf) -> Result<()> {
+    let src_bytes = read_file(&from)?;
+    let options = SignatureOptions {
+        block_size: 1024,    // split into 1KB blocks
+        crypto_hash_size: 8, // store 8 bytes of crypto hash
+    };
+    if to.exists() {
+        let dst_bytes = read_file(&to)?;
+
+        let sig = Signature::calculate(&dst_bytes, options);
+        let indexed_sig = sig.index();
+
+        let mut delta: Vec<u8> = Vec::new();
+        diff(&indexed_sig, &src_bytes, &mut delta)?;
+        dbg!(&delta);
+
+        let mut new_bytes = Vec::new();
+        apply(&dst_bytes, &delta, &mut new_bytes)?;
+        write_file(&to, &new_bytes)?;
+    } else {
+        write_file(&to, &src_bytes)?;
+    }
+    Ok(())
+}
 #[cfg(test)]
 mod tests {
     use super::*;

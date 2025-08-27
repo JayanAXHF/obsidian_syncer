@@ -78,4 +78,6 @@ pub enum Action {
     TerminateVaultListeners,
     VaultPluginChanged(PathBuf),
     UpdatePlugins(PathBuf),
+    StartedSync,
+    FinishedSync,
 }
