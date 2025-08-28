@@ -1,5 +1,6 @@
 mod errors;
 mod logging;
+use std::fs::read_dir;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -69,7 +70,21 @@ async fn main() -> Result<()> {
                         > = tokio::spawn(async move {
                             debug!("Starting Syncing Operation");
                             for vault in to_be_synced {
+                                let entries = read_dir(&vault.path)?;
+                                let entries = entries
+                                    .filter_map(Result::ok)
+                                    .map(|e| {
+                                        let path = e.path();
+                                        let name = path.file_name().unwrap_or_default();
+                                        name.to_owned()
+                                    })
+                                    .collect_vec();
+
                                 info!("Syncing vault {}", vault.path.display());
+
+                                if entries.contains(&"no_sync".to_owned().into()) {
+                                    continue;
+                                }
                                 sync_vault(vault_path.clone(), vault.path.clone()).await?;
                             }
 
