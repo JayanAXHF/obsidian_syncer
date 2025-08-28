@@ -9,6 +9,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, channel};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -34,7 +35,11 @@ pub fn watch_vault_list(tx: mpsc::Sender<Event>) -> Result<()> {
     Ok(())
 }
 
-pub fn watch_vault_plugins(tx: mpsc::Sender<Action>, vault_path: PathBuf) -> Result<()> {
+pub fn watch_vault_plugins(
+    tx: mpsc::Sender<Action>,
+    vault_path: PathBuf,
+    not_syncing: Arc<AtomicBool>,
+) -> Result<()> {
     let (watcher_tx, watcher_rx) = channel();
     let mut watcher = RecommendedWatcher::new(watcher_tx, Config::default())?;
     watcher.watch(
@@ -45,7 +50,9 @@ pub fn watch_vault_plugins(tx: mpsc::Sender<Action>, vault_path: PathBuf) -> Res
         match event {
             Ok(event) => {
                 if let EventKind::Modify(ModifyKind::Data(_)) = event.kind {
-                    tx.send(Action::VaultPluginChanged(vault_path.clone()))?;
+                    if not_syncing.load(std::sync::atomic::Ordering::Relaxed) {
+                        tx.send(Action::VaultPluginChanged(vault_path.clone()))?;
+                    }
                 }
             }
             Err(e) => {
@@ -59,6 +66,7 @@ pub fn watch_vault_plugins(tx: mpsc::Sender<Action>, vault_path: PathBuf) -> Res
 pub async fn setup_vault_listeners(
     tx: tokio::sync::broadcast::Sender<Action>,
     rx: &mut tokio::sync::broadcast::Receiver<Action>,
+    free: Arc<AtomicBool>,
 ) -> Result<()> {
     let (watcher_tx, watcher_rx) = channel();
     let watcher_paths: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
@@ -104,7 +112,7 @@ pub async fn setup_vault_listeners(
                 }
                 Action::VaultPluginChanged(vault_path) => {
                     info!("Vault plugin changed: {}", vault_path.display());
-                    tx.send(Action::UpdatePlugins(vault_path))?;
+                    //tx.send(Action::UpdatePlugins(vault_path))?;
                 }
                 _ => {}
             }
@@ -118,31 +126,30 @@ pub async fn setup_vault_listeners(
     let watcher_thread: tokio::task::JoinHandle<color_eyre::eyre::Result<()>> =
         tokio::spawn(async move {
             for event in watcher_rx {
-                let can_continue = rx3.recv().await? != Action::StartedSync;
-
-                if !can_continue {
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                    continue;
-                }
-
-                let vaults = Vaults::new();
-                let vaults = vaults.get_vaults();
-                match event {
-                    Ok(event) => {
-                        info!("Event: {:?}", event);
-                        match event.kind {
-                            EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_) => {
-                                for vault in vaults.iter() {
-                                    if event.paths.iter().any(|p| p.starts_with(&vault.path)) {
-                                        tx3.send(Action::UpdatePlugins(vault.path.clone()))?;
-                                        break;
+                info!(free = ?free.load(std::sync::atomic::Ordering::Relaxed));
+                if free.load(std::sync::atomic::Ordering::Relaxed) {
+                    let vaults = Vaults::new();
+                    let open_vaults = vaults.get_open_vaults();
+                    match event {
+                        Ok(event) => {
+                            info!("Event: {:?}", event);
+                            match event.kind {
+                                EventKind::Modify(_)
+                                | EventKind::Create(_)
+                                | EventKind::Remove(_) => {
+                                    for vault in open_vaults.iter() {
+                                        if event.paths.iter().any(|p| p.starts_with(&vault.path)) {
+                                            tx3.send(Action::UpdatePlugins(vault.path.clone()))?;
+                                            break;
+                                        }
                                     }
                                 }
+                                _ => {}
                             }
-                            _ => {}
                         }
+                        Err(e) => println!("Error: {:?}", e),
                     }
-                    Err(e) => println!("Error: {:?}", e),
+                    tokio::time::sleep(Duration::from_millis(100)).await;
                 }
             }
             Ok(())
@@ -172,6 +179,8 @@ pub async fn sync_vault(from: PathBuf, to: PathBuf) -> Result<()> {
     let plugins_to = to.join(".obsidian").join("plugins");
     dbg!(&plugins_from, &plugins_to);
     let walk_result = Walk::new(&plugins_from);
+    dbg!("Finished Walk");
+
     let options = SignatureOptions {
         block_size: 1024,    // split into 1KB blocks
         crypto_hash_size: 8, // store 8 bytes of crypto hash
@@ -194,21 +203,32 @@ pub async fn sync_vault(from: PathBuf, to: PathBuf) -> Result<()> {
         if dst.exists() {
             let dst_bytes = read_file(&dst)?;
 
+            dbg!("getting sig");
             let sig = Signature::calculate(&dst_bytes, options);
             let indexed_sig = sig.index();
 
             let mut delta: Vec<u8> = Vec::new();
+            dbg!("getting delta");
             diff(&indexed_sig, &src_bytes, &mut delta)?;
-            dbg!(&delta);
 
             let mut new_bytes = Vec::new();
+            dbg!("applying delta");
             apply(&dst_bytes, &delta, &mut new_bytes)?;
+            dbg!("writing file");
             write_file(&dst, &new_bytes)?;
-            let new_bytes_str = String::from_utf8(new_bytes)?;
-            println!("File {} updated", dst.display());
-            println!("{}", new_bytes_str);
         } else {
             write_file(&dst, &src_bytes)?;
+        }
+    }
+    // --- Delete files that no longer exist in "from" ---
+    for entry in Walk::new(&plugins_to).filter_map(Result::ok) {
+        if entry.file_type().expect("NO file type found").is_file() {
+            let rel_path = entry.path().strip_prefix(&plugins_to)?;
+            let src_path = plugins_from.join(rel_path);
+            if !src_path.exists() {
+                dbg!("Deleting", &entry.path());
+                fs::remove_file(entry.path())?;
+            }
         }
     }
     Ok(())
@@ -228,7 +248,6 @@ pub fn sync_file(from: PathBuf, to: PathBuf) -> Result<()> {
 
         let mut delta: Vec<u8> = Vec::new();
         diff(&indexed_sig, &src_bytes, &mut delta)?;
-        dbg!(&delta);
 
         let mut new_bytes = Vec::new();
         apply(&dst_bytes, &delta, &mut new_bytes)?;
