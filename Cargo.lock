@@ -77,12 +77,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "arrayref"
-version = "0.3.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76a2e8124351fda1ef8aaaa3bbd7ebbcb486bbcd4225aca0aa0d84bb2db8fecb"
-
-[[package]]
 name = "autocfg"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -233,6 +227,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "diff"
+version = "0.1.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56254986775e3233ffa9c4d7d3faaf6d36a2c09d30b20687e9f88bc8bafc16c8"
+
+[[package]]
 name = "directories"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -291,12 +291,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "fast_rsync"
-version = "0.2.0"
+name = "fbuzhash"
+version = "0.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d97c4d6e20491c84c60612a24660fc1fbfc56bfe24f5b49e6a9fd3259010794"
+checksum = "cd112009eee2e51e255536aa387c5f059bfb43dfb7b58e7e4d4f1f3f49868ccc"
 dependencies = [
- "arrayref",
+ "log",
 ]
 
 [[package]]
@@ -607,12 +607,13 @@ dependencies = [
  "color-eyre",
  "directories",
  "dirs",
- "fast_rsync",
+ "fbuzhash",
  "human-panic",
  "ignore",
  "itertools",
  "libc",
  "notify",
+ "pretty_assertions",
  "serde",
  "serde_json",
  "strip-ansi-escapes",
@@ -620,6 +621,7 @@ dependencies = [
  "tracing",
  "tracing-error",
  "tracing-subscriber",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -711,6 +713,16 @@ name = "powerfmt"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
+
+[[package]]
+name = "pretty_assertions"
+version = "1.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ae130e2f271fbc2ac3a40fb1d07180839cdbbe443c7a27e1e3c13c5cac0116d"
+dependencies = [
+ "diff",
+ "yansi",
+]
 
 [[package]]
 name = "proc-macro2"
@@ -1388,3 +1400,15 @@ checksum = "6f42320e61fe2cfd34354ecb597f86f413484a798ba44a8ca1165c58d42da6c1"
 dependencies = [
  "bitflags 2.9.3",
 ]
+
+[[package]]
+name = "xxhash-rust"
+version = "0.8.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdd20c5420375476fbd4394763288da7eb0cc0b8c11deed431a91562af7335d3"
+
+[[package]]
+name = "yansi"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfe53a6657fd280eaa890a3bc59152892ffa3e30101319d168b781ed6529b049"

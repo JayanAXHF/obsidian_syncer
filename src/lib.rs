@@ -1,6 +1,7 @@
+pub mod cryptography;
 pub mod structs;
 use color_eyre::eyre::Result;
-use fast_rsync::{Signature, SignatureOptions, apply, diff};
+use cryptography::delta::Delta;
 use ignore::Walk;
 use notify::event::ModifyKind;
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
@@ -181,10 +182,6 @@ pub async fn sync_vault(from: PathBuf, to: PathBuf) -> Result<()> {
     let walk_result = Walk::new(&plugins_from);
     dbg!("Finished Walk");
 
-    let options = SignatureOptions {
-        block_size: 1024,    // split into 1KB blocks
-        crypto_hash_size: 8, // store 8 bytes of crypto hash
-    };
     let from_community_plugins = from.join(".obsidian").join("community-plugins.json");
     let to_community_plugins = to.join(".obsidian").join("community-plugins.json");
 
@@ -202,20 +199,9 @@ pub async fn sync_vault(from: PathBuf, to: PathBuf) -> Result<()> {
         let src_bytes = read_file(path)?;
         if dst.exists() {
             let dst_bytes = read_file(&dst)?;
-
-            dbg!("getting sig");
-            let sig = Signature::calculate(&dst_bytes, options);
-            let indexed_sig = sig.index();
-
-            let mut delta: Vec<u8> = Vec::new();
-            dbg!("getting delta");
-            diff(&indexed_sig, &src_bytes, &mut delta)?;
-
-            let mut new_bytes = Vec::new();
-            dbg!("applying delta");
-            apply(&dst_bytes, &delta, &mut new_bytes)?;
-            dbg!("writing file");
-            write_file(&dst, &new_bytes)?;
+            let del = Delta::new();
+            let delta = del.generate_delta(&dst_bytes, &src_bytes);
+            delta.apply(&src_bytes, dst.clone()).unwrap();
         } else {
             write_file(&dst, &src_bytes)?;
         }
@@ -236,22 +222,11 @@ pub async fn sync_vault(from: PathBuf, to: PathBuf) -> Result<()> {
 
 pub fn sync_file(from: PathBuf, to: PathBuf) -> Result<()> {
     let src_bytes = read_file(&from)?;
-    let options = SignatureOptions {
-        block_size: 1024,    // split into 1KB blocks
-        crypto_hash_size: 8, // store 8 bytes of crypto hash
-    };
     if to.exists() {
         let dst_bytes = read_file(&to)?;
-
-        let sig = Signature::calculate(&dst_bytes, options);
-        let indexed_sig = sig.index();
-
-        let mut delta: Vec<u8> = Vec::new();
-        diff(&indexed_sig, &src_bytes, &mut delta)?;
-
-        let mut new_bytes = Vec::new();
-        apply(&dst_bytes, &delta, &mut new_bytes)?;
-        write_file(&to, &new_bytes)?;
+        let del = Delta::new();
+        let delta = del.generate_delta(&dst_bytes, &src_bytes);
+        delta.apply(&src_bytes, to.clone()).unwrap();
     } else {
         write_file(&to, &src_bytes)?;
     }
