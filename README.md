@@ -10,24 +10,7 @@ Additionally, the tool is designed to be mindful of your system's resources. It 
 
 ## Usage
 
-To use Obsidian Syncer, you need to create a `vaults.json` file in the same directory as the executable. This file should contain a list of your Obsidian vaults, with each vault represented by a JSON object containing its name and path.
-
-Here is an example of a `vaults.json` file:
-
-```json
-[
-    {
-        "name": "My Vault",
-        "path": "/path/to/my/vault"
-    },
-    {
-        "name": "Another Vault",
-        "path": "/path/to/another/vault"
-    }
-]
-```
-
-Once you have created the `vaults.json` file, you can run the tool from your terminal. It will automatically detect the vaults and start monitoring them for changes.
+Just run the program, it handles the rest. It finds the vaults from the obsidian.json file in your central obsidian folder, which differs from OS to OS.
 
 ## Building from Source
 
