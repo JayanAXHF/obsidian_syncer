@@ -14,7 +14,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, channel};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use structs::{Action, VAULTS_FILE, Vault, Vaults};
+use structs::{Action, VAULTS_FILE, Vaults};
 use tracing::{error, info};
 
 pub fn watch_vault_list(tx: mpsc::Sender<Event>) -> Result<()> {
@@ -148,7 +148,7 @@ pub async fn setup_vault_listeners(
                                 _ => {}
                             }
                         }
-                        Err(e) => println!("Error: {:?}", e),
+                        Err(e) => error!("Error: {:?}", e),
                     }
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }

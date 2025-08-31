@@ -29,8 +29,6 @@ async fn main() -> Result<()> {
     let tx_move = tx.clone();
     let is_not_syncing = Arc::clone(&is_free);
     let _thread_vault_listeners = tokio::spawn(async move {
-        println!("Starting vault listeners");
-
         obsidian_syncer::setup_vault_listeners(
             tx_move.clone(),
             &mut rx1,
